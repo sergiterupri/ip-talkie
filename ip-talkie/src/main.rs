@@ -86,13 +86,14 @@ fn main() {
     // Thread to capture and send audio
     let send_thread = {
         let running_send = Arc::clone(&running);
+        let moved_running_send = Arc::clone(&running);
         let config_send = config.clone();
         thread::spawn(move || {
             let err_fn = |err| eprintln!("Error in input stream: {}", err);
             let stream = input_device.build_input_stream(
                 &config_send,
                 move |data: &[f32], _| {
-                    if !running_send.load(Ordering::SeqCst) {
+                    if !moved_running_send.load(Ordering::SeqCst) {
                         println!("Stopping send thread...");
                         return;
                     }
@@ -115,13 +116,14 @@ fn main() {
     // Thread to receive and play audio
     let recv_thread = {
         let running_recv = Arc::clone(&running);
+        let moved_running_recv = Arc::clone(&running);
         let config_recv = config.clone();
         thread::spawn(move || {
             let err_fn = |err| eprintln!("Error in output stream: {}", err);
             let stream = output_device.build_output_stream(
                 &config_recv,
                 move |data: &mut [f32], _| {
-                    if !running_recv.load(Ordering::SeqCst) {
+                    if !moved_running_recv.load(Ordering::SeqCst) {
                         println!("Stopping receive thread...");
                         return;
                     }
