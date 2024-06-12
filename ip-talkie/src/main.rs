@@ -72,24 +72,22 @@ fn main() {
 
     // Set up signal handling for graceful shutdown
     {
-        let running = Arc::clone(&running);
+        let running_clone = Arc::clone(&running);
         ctrlc::set_handler(move || {
             println!("Received Ctrl+C! Shutting down...");
-            running.store(false, Ordering::SeqCst);
+            running_clone.store(false, Ordering::SeqCst);
         }).expect("Error setting Ctrl-C handler");
     }
 
     // Clone the socket and running flag for sending and receiving threads
     let socket_clone_send = Arc::clone(&local_socket);
     let socket_clone_recv = Arc::clone(&local_socket);
-    let running_send = Arc::clone(&running);
-    let running_recv = Arc::clone(&running);
-    let config_send = config.clone(); // Clone the config for send thread
 
     // Thread to capture and send audio
-    let send_thread = thread::spawn({
-        let running_send = Arc::clone(&running_send); // Clone again for use inside the closure
-        move || {
+    let send_thread = {
+        let running_send = Arc::clone(&running);
+        let config_send = config.clone();
+        thread::spawn(move || {
             let err_fn = |err| eprintln!("Error in input stream: {}", err);
             let stream = input_device.build_input_stream(
                 &config_send,
@@ -111,15 +109,14 @@ fn main() {
             while running_send.load(Ordering::SeqCst) {
                 thread::sleep(std::time::Duration::from_millis(100));
             }
-        }
-    });
-
-    let config_recv = config.clone(); // Clone the config for recv thread
+        })
+    };
 
     // Thread to receive and play audio
-    let recv_thread = thread::spawn({
-        let running_recv = Arc::clone(&running_recv); // Clone again for use inside the closure
-        move || {
+    let recv_thread = {
+        let running_recv = Arc::clone(&running);
+        let config_recv = config.clone();
+        thread::spawn(move || {
             let err_fn = |err| eprintln!("Error in output stream: {}", err);
             let stream = output_device.build_output_stream(
                 &config_recv,
@@ -145,8 +142,8 @@ fn main() {
             while running_recv.load(Ordering::SeqCst) {
                 thread::sleep(std::time::Duration::from_millis(100));
             }
-        }
-    });
+        })
+    };
 
     // Main loop to keep the application running until interrupted
     while running.load(Ordering::SeqCst) {
