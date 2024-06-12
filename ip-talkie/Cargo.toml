@@ -1,12 +1,12 @@
 [package]
-name = "voip_walkie_talkie"
+name = "ip_talkie"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 cpal = "0.11"
-clap = "4.0"  # Updated to a newer version if available
-ctrlc = "3.2"  # Updated to the latest version
+clap = { version = "4.0", features = ["derive"] }  # Updated to version 4 with derive feature
+ctrlc = "3.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa = "0.4"

@@ -1,5 +1,6 @@
-use clap::{App, Arg};
-use cpal::traits::{DeviceTrait, EventLoopTrait, HostTrait};
+use clap::{Arg, Command};
+use cpal::traits::{DeviceTrait, StreamTrait, HostTrait};
+use cpal::StreamConfig;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
@@ -33,18 +34,18 @@ fn deserialize_rtp_packet(data: &[u8]) -> RtpPacket {
 
 // Main function to run the VoIP application
 fn main() {
-    let matches = App::new("VoIP Walkie-Talkie")
+    let matches = Command::new("VoIP Walkie-Talkie")
         .version("1.0")
         .about("Peer-to-peer voice chat application")
-        .arg(Arg::with_name("host")
-            .short("h")
+        .arg(Arg::new("host")
+            .short('h')
             .long("host")
             .value_name("HOST")
             .help("The IP address of the friend to connect to")
             .required(true)
             .takes_value(true))
-        .arg(Arg::with_name("port")
-            .short("p")
+        .arg(Arg::new("port")
+            .short('p')
             .long("port")
             .value_name("PORT")
             .help("The port number of the friend to connect to")
@@ -62,12 +63,10 @@ fn main() {
 
     let audio_format = get_default_format();
     let host = cpal::default_host();
-    let event_loop = host.event_loop();
     let input_device = host.default_input_device().expect("Failed to get input device");
     let output_device = host.default_output_device().expect("Failed to get output device");
 
-    let input_stream_id = event_loop.build_input_stream(&input_device, &audio_format).unwrap();
-    let output_stream_id = event_loop.build_output_stream(&output_device, &audio_format).unwrap();
+    let config: StreamConfig = audio_format.into();
 
     // Create a flag to indicate if the application is running
     let running = Arc::new(AtomicBool::new(true));
@@ -89,58 +88,63 @@ fn main() {
 
     // Thread to capture and send audio
     let send_thread = thread::spawn(move || {
-        event_loop.run(move |stream_id, stream_result| {
-            if !running_send.load(Ordering::SeqCst) {
-                println!("Stopping send thread...");
-                return;
-            }
-            if stream_id == input_stream_id {
-                if let Ok(cpal::StreamData::Input { buffer }) = stream_result {
-                    let input_data: &[f32] = buffer.as_slice().unwrap();
-                    let rtp_packet = RtpPacket {
-                        payload: input_data.iter().map(|&sample| (sample * 32767.0) as u8).collect(),
-                    };
-                    let rtp_data = serialize_rtp_packet(&rtp_packet);
-                    socket_clone_send.send_to(&rtp_data, remote_addr).expect("Failed to send data");
+        let stream = input_device.build_input_stream(
+            &config,
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                if !running_send.load(Ordering::SeqCst) {
+                    println!("Stopping send thread...");
+                    return;
                 }
-            }
-        });
+                let rtp_packet = RtpPacket {
+                    payload: data.iter().map(|&sample| (sample * 32767.0) as u8).collect(),
+                };
+                let rtp_data = serialize_rtp_packet(&rtp_packet);
+                socket_clone_send.send_to(&rtp_data, remote_addr).expect("Failed to send data");
+            },
+            |err| {
+                eprintln!("Error in input stream: {}", err);
+            },
+        ).unwrap();
+        stream.play().unwrap();
+        while running_send.load(Ordering::SeqCst) {
+            thread::sleep(std::time::Duration::from_millis(100));
+        }
     });
 
     // Thread to receive and play audio
     let recv_thread = thread::spawn(move || {
-        let mut buffer = [0; 1024];
-        event_loop.run(move |stream_id, stream_result| {
-            if !running_recv.load(Ordering::SeqCst) {
-                println!("Stopping receive thread...");
-                return;
-            }
-            if stream_id == output_stream_id {
-                if let Ok(cpal::StreamData::Output { buffer }) = stream_result {
-                    let output_data: &mut [f32] = buffer.as_mut_slice().unwrap();
-                    if let Ok((size, _)) = socket_clone_recv.recv_from(&mut buffer) {
-                        let rtp_packet = deserialize_rtp_packet(&buffer[..size]);
-                        for (i, sample) in rtp_packet.payload.iter().enumerate() {
-                            output_data[i] = *sample as f32 / 32767.0;
+        let stream = output_device.build_output_stream(
+            &config,
+            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                if !running_recv.load(Ordering::SeqCst) {
+                    println!("Stopping receive thread...");
+                    return;
+                }
+                let mut buffer = [0; 1024];
+                if let Ok((size, _)) = socket_clone_recv.recv_from(&mut buffer) {
+                    let rtp_packet = deserialize_rtp_packet(&buffer[..size]);
+                    for (i, sample) in rtp_packet.payload.iter().enumerate() {
+                        if i < data.len() {
+                            data[i] = *sample as f32 / 32767.0;
                         }
                     }
                 }
-            }
-        });
+            },
+            |err| {
+                eprintln!("Error in output stream: {}", err);
+            },
+        ).unwrap();
+        stream.play().unwrap();
+        while running_recv.load(Ordering::SeqCst) {
+            thread::sleep(std::time::Duration::from_millis(100));
+        }
     });
-
-    // Start the input and output streams
-    event_loop.play_stream(input_stream_id.clone()).expect("Failed to play input stream");
-    event_loop.play_stream(output_stream_id.clone()).expect("Failed to play output stream");
 
     // Main loop to keep the application running until interrupted
     while running.load(Ordering::SeqCst) {
-        thread::park_timeout(std::time::Duration::from_millis(100));
+        thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    // Stop the event loop and wait for threads to finish
-    event_loop.destroy_stream(input_stream_id).expect("Failed to destroy input stream");
-    event_loop.destroy_stream(output_stream_id).expect("Failed to destroy output stream");
     send_thread.join().expect("Failed to join send thread");
     recv_thread.join().expect("Failed to join receive thread");
 
