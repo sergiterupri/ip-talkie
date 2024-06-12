@@ -1,15 +1,16 @@
 use clap::{Arg, Command};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, StreamConfig};
+use cpal::{StreamConfig};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
+use std::time::Duration;
 
 // Helper function to get a default audio format
 fn get_default_format() -> cpal::SupportedStreamConfig {
     let host = cpal::default_host();
     let device = host.default_output_device().expect("Failed to get default output device");
-    device.default_output_format().expect("Failed to get default output format")
+    device.default_output_config().expect("Failed to get default output config")
 }
 
 // RTP Packet structure
@@ -101,6 +102,7 @@ fn main() {
                 socket_clone_send.send_to(&rtp_data, remote_addr).expect("Failed to send data");
             },
             err_fn,
+            None::<Duration>,  // Providing the fourth argument as None
         ).unwrap();
         stream.play().unwrap();
         while running_send.load(Ordering::SeqCst) {
@@ -129,6 +131,7 @@ fn main() {
                 }
             },
             err_fn,
+            None::<Duration>,  // Providing the fourth argument as None
         ).unwrap();
         stream.play().unwrap();
         while running_recv.load(Ordering::SeqCst) {
