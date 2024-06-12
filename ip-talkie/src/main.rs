@@ -1,5 +1,6 @@
 use clap::{Arg, Command};
-use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{SampleFormat, StreamConfig};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
@@ -63,7 +64,7 @@ fn main() {
     let input_device = host.default_input_device().expect("Failed to get input device");
     let output_device = host.default_output_device().expect("Failed to get output device");
 
-    let config = audio_format.config().clone();
+    let config: StreamConfig = audio_format.config().clone();
 
     // Create a flag to indicate if the application is running
     let running = Arc::new(AtomicBool::new(true));
@@ -86,18 +87,15 @@ fn main() {
     // Thread to capture and send audio
     let send_thread = thread::spawn(move || {
         let err_fn = |err| eprintln!("Error in input stream: {}", err);
-        let stream = input_device.build_input_stream_raw(
+        let stream = input_device.build_input_stream(
             &config,
-            cpal::SampleFormat::F32,
-            move |data: &[u8], _| {
+            move |data: &[f32], _| {
                 if !running_send.load(Ordering::SeqCst) {
                     println!("Stopping send thread...");
                     return;
                 }
-                // Convert &[u8] to &[f32]
-                let input_data: &[f32] = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len() / 4) };
                 let rtp_packet = RtpPacket {
-                    payload: input_data.iter().map(|&sample| (sample * 32767.0) as u8).collect(),
+                    payload: data.iter().map(|&sample| (sample * 32767.0) as u8).collect(),
                 };
                 let rtp_data = serialize_rtp_packet(&rtp_packet);
                 socket_clone_send.send_to(&rtp_data, remote_addr).expect("Failed to send data");
@@ -113,22 +111,19 @@ fn main() {
     // Thread to receive and play audio
     let recv_thread = thread::spawn(move || {
         let err_fn = |err| eprintln!("Error in output stream: {}", err);
-        let stream = output_device.build_output_stream_raw(
+        let stream = output_device.build_output_stream(
             &config,
-            cpal::SampleFormat::F32,
-            move |data: &mut [u8], _| {
+            move |data: &mut [f32], _| {
                 if !running_recv.load(Ordering::SeqCst) {
                     println!("Stopping receive thread...");
                     return;
                 }
-                // Convert &mut [u8] to &mut [f32]
-                let output_data: &mut [f32] = unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr() as *mut f32, data.len() / 4) };
                 let mut buffer = [0; 1024];
                 if let Ok((size, _)) = socket_clone_recv.recv_from(&mut buffer) {
                     let rtp_packet = deserialize_rtp_packet(&buffer[..size]);
                     for (i, sample) in rtp_packet.payload.iter().enumerate() {
-                        if i < output_data.len() {
-                            output_data[i] = *sample as f32 / 32767.0;
+                        if i < data.len() {
+                            data[i] = *sample as f32 / 32767.0;
                         }
                     }
                 }

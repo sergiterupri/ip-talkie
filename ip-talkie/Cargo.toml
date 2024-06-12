@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 cpal = "0.11"
-clap = { version = "4.0", features = ["derive"] }  # Updated to version 4 with derive feature
+clap = { version = "4.0", features = ["derive"] }
 ctrlc = "3.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
