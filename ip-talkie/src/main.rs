@@ -87,58 +87,64 @@ fn main() {
     let config_send = config.clone(); // Clone the config for send thread
 
     // Thread to capture and send audio
-    let send_thread = thread::spawn(move || {
-        let err_fn = |err| eprintln!("Error in input stream: {}", err);
-        let stream = input_device.build_input_stream(
-            &config_send,
-            move |data: &[f32], _| {
-                if !running_send.load(Ordering::SeqCst) {
-                    println!("Stopping send thread...");
-                    return;
-                }
-                let rtp_packet = RtpPacket {
-                    payload: data.iter().map(|&sample| (sample * 32767.0) as u8).collect(),
-                };
-                let rtp_data = serialize_rtp_packet(&rtp_packet);
-                socket_clone_send.send_to(&rtp_data, remote_addr).expect("Failed to send data");
-            },
-            err_fn,
-            None::<Duration>,  // Providing the fourth argument as None
-        ).unwrap();
-        stream.play().unwrap();
-        while running_send.load(Ordering::SeqCst) {
-            thread::sleep(std::time::Duration::from_millis(100));
+    let send_thread = thread::spawn({
+        let running_send = Arc::clone(&running_send); // Clone again for use inside the closure
+        move || {
+            let err_fn = |err| eprintln!("Error in input stream: {}", err);
+            let stream = input_device.build_input_stream(
+                &config_send,
+                move |data: &[f32], _| {
+                    if !running_send.load(Ordering::SeqCst) {
+                        println!("Stopping send thread...");
+                        return;
+                    }
+                    let rtp_packet = RtpPacket {
+                        payload: data.iter().map(|&sample| (sample * 32767.0) as u8).collect(),
+                    };
+                    let rtp_data = serialize_rtp_packet(&rtp_packet);
+                    socket_clone_send.send_to(&rtp_data, remote_addr).expect("Failed to send data");
+                },
+                err_fn,
+                None::<Duration>,  // Providing the fourth argument as None
+            ).unwrap();
+            stream.play().unwrap();
+            while running_send.load(Ordering::SeqCst) {
+                thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
     });
 
     let config_recv = config.clone(); // Clone the config for recv thread
 
     // Thread to receive and play audio
-    let recv_thread = thread::spawn(move || {
-        let err_fn = |err| eprintln!("Error in output stream: {}", err);
-        let stream = output_device.build_output_stream(
-            &config_recv,
-            move |data: &mut [f32], _| {
-                if !running_recv.load(Ordering::SeqCst) {
-                    println!("Stopping receive thread...");
-                    return;
-                }
-                let mut buffer = [0; 1024];
-                if let Ok((size, _)) = socket_clone_recv.recv_from(&mut buffer) {
-                    let rtp_packet = deserialize_rtp_packet(&buffer[..size]);
-                    for (i, sample) in rtp_packet.payload.iter().enumerate() {
-                        if i < data.len() {
-                            data[i] = *sample as f32 / 32767.0;
+    let recv_thread = thread::spawn({
+        let running_recv = Arc::clone(&running_recv); // Clone again for use inside the closure
+        move || {
+            let err_fn = |err| eprintln!("Error in output stream: {}", err);
+            let stream = output_device.build_output_stream(
+                &config_recv,
+                move |data: &mut [f32], _| {
+                    if !running_recv.load(Ordering::SeqCst) {
+                        println!("Stopping receive thread...");
+                        return;
+                    }
+                    let mut buffer = [0; 1024];
+                    if let Ok((size, _)) = socket_clone_recv.recv_from(&mut buffer) {
+                        let rtp_packet = deserialize_rtp_packet(&buffer[..size]);
+                        for (i, sample) in rtp_packet.payload.iter().enumerate() {
+                            if i < data.len() {
+                                data[i] = *sample as f32 / 32767.0;
+                            }
                         }
                     }
-                }
-            },
-            err_fn,
-            None::<Duration>,  // Providing the fourth argument as None
-        ).unwrap();
-        stream.play().unwrap();
-        while running_recv.load(Ordering::SeqCst) {
-            thread::sleep(std::time::Duration::from_millis(100));
+                },
+                err_fn,
+                None::<Duration>,  // Providing the fourth argument as None
+            ).unwrap();
+            stream.play().unwrap();
+            while running_recv.load(Ordering::SeqCst) {
+                thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
     });
 
