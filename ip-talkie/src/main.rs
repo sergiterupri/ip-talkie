@@ -41,15 +41,13 @@ fn main() {
             .long("host")
             .value_name("HOST")
             .help("The IP address of the friend to connect to")
-            .required(true)
-            .takes_value(true))
+            .required(true))
         .arg(Arg::new("port")
             .short('p')
             .long("port")
             .value_name("PORT")
             .help("The port number of the friend to connect to")
-            .required(true)
-            .takes_value(true))
+            .required(true))
         .get_matches();
 
     let friend_ip = matches.get_one::<String>("host").unwrap().as_str();
