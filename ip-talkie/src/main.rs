@@ -1,12 +1,11 @@
 use clap::{Arg, Command};
-use cpal::traits::{DeviceTrait, StreamTrait, HostTrait};
-use cpal::StreamConfig;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
 
 // Helper function to get a default audio format
-fn get_default_format() -> cpal::Format {
+fn get_default_format() -> cpal::SupportedStreamConfig {
     let host = cpal::default_host();
     let device = host.default_output_device().expect("Failed to get default output device");
     device.default_output_format().expect("Failed to get default output format")
@@ -53,8 +52,8 @@ fn main() {
             .takes_value(true))
         .get_matches();
 
-    let friend_ip = matches.value_of("host").unwrap();
-    let friend_port: u16 = matches.value_of("port").unwrap().parse().expect("Invalid port number");
+    let friend_ip = matches.get_one::<String>("host").unwrap().as_str();
+    let friend_port: u16 = matches.get_one::<String>("port").unwrap().parse().expect("Invalid port number");
 
     let rtp_port = 49170;  // Common RTP port for both sending and receiving
 
@@ -66,7 +65,7 @@ fn main() {
     let input_device = host.default_input_device().expect("Failed to get input device");
     let output_device = host.default_output_device().expect("Failed to get output device");
 
-    let config: StreamConfig = audio_format.into();
+    let config = audio_format.config();
 
     // Create a flag to indicate if the application is running
     let running = Arc::new(AtomicBool::new(true));
@@ -88,9 +87,10 @@ fn main() {
 
     // Thread to capture and send audio
     let send_thread = thread::spawn(move || {
+        let err_fn = |err| eprintln!("Error in input stream: {}", err);
         let stream = input_device.build_input_stream(
             &config,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+            move |data: &[f32], _| {
                 if !running_send.load(Ordering::SeqCst) {
                     println!("Stopping send thread...");
                     return;
@@ -101,9 +101,7 @@ fn main() {
                 let rtp_data = serialize_rtp_packet(&rtp_packet);
                 socket_clone_send.send_to(&rtp_data, remote_addr).expect("Failed to send data");
             },
-            |err| {
-                eprintln!("Error in input stream: {}", err);
-            },
+            err_fn,
         ).unwrap();
         stream.play().unwrap();
         while running_send.load(Ordering::SeqCst) {
@@ -113,9 +111,10 @@ fn main() {
 
     // Thread to receive and play audio
     let recv_thread = thread::spawn(move || {
+        let err_fn = |err| eprintln!("Error in output stream: {}", err);
         let stream = output_device.build_output_stream(
             &config,
-            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            move |data: &mut [f32], _| {
                 if !running_recv.load(Ordering::SeqCst) {
                     println!("Stopping receive thread...");
                     return;
@@ -130,9 +129,7 @@ fn main() {
                     }
                 }
             },
-            |err| {
-                eprintln!("Error in output stream: {}", err);
-            },
+            err_fn,
         ).unwrap();
         stream.play().unwrap();
         while running_recv.load(Ordering::SeqCst) {
